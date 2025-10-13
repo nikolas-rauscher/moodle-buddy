@@ -222,6 +222,10 @@ export function parseURLFromNode(
     }
   }
 
+  if (node.tagName === "SOURCE") {
+    return (node as HTMLSourceElement).src
+  }
+
   return ""
 }
 
