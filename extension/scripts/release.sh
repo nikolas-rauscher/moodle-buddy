@@ -26,6 +26,12 @@ mkdir tmp
 cp moodle-buddy-firefox.zip "tmp/moodle-buddy-firefox-$EXT_VERSION.zip"
 cp moodle-buddy-chrome.zip "tmp/moodle-buddy-chrome-$EXT_VERSION.zip"
 
-gh release create "$EXT_VERSION" --notes-file "release-notes/$EXT_VERSION.md" --title "Version $EXT_VERSION" "tmp/moodle-buddy-firefox-$EXT_VERSION.zip" "tmp/moodle-buddy-chrome-$EXT_VERSION.zip"
+RELEASE_NOTES_FILE="release-notes/$EXT_VERSION.md"
+if [ ! -f "$RELEASE_NOTES_FILE" ]; then
+  echo "Release notes file $RELEASE_NOTES_FILE does not exist."
+  exit 1
+fi
+
+gh release create "$EXT_VERSION" --notes-file "$RELEASE_NOTES_FILE" --title "Version $EXT_VERSION" "tmp/moodle-buddy-firefox-$EXT_VERSION.zip" "tmp/moodle-buddy-chrome-$EXT_VERSION.zip"
 
 rm -rf tmp
