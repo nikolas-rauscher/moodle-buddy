@@ -6,6 +6,7 @@ import {
   FileResource,
   FolderResource,
   CourseData,
+  VideoServiceResource,
 } from "types"
 import * as parser from "@shared/parser"
 import { getMoodleBaseURL, getURLRegex } from "@shared/regexHelpers"
@@ -260,6 +261,337 @@ class Course {
     this.activities.push(activity)
   }
 
+  private async fetchDocument(url: string): Promise<Document | null> {
+    try {
+      const response = await fetch(url)
+      const body = await response.text()
+      return new DOMParser().parseFromString(body, "text/html")
+    } catch (err) {
+      logger.error(err)
+      return null
+    }
+  }
+
+  private getMoodleSesskey(document: Document): string | null {
+    const scriptContent = Array.from(document.scripts)
+      .map((script) => script.textContent ?? "")
+      .find((content) => content.includes('"sesskey"') || content.includes("sesskey"))
+
+    if (!scriptContent) {
+      return null
+    }
+
+    const sesskeyMatch = scriptContent.match(/"sesskey":"([^"]+)"/)
+    return sesskeyMatch?.[1] ?? null
+  }
+
+  private addVideoServiceResource(resource: VideoServiceResource): void {
+    const detectedURLs = this.resources.map((r) => r.href)
+    if (detectedURLs.includes(resource.href)) {
+      return
+    }
+
+    this.addResource(resource)
+  }
+
+  private async addVideoServiceVideo(
+    videoPageURL: string,
+    section: string,
+    fallbackName: string,
+    partOfFolder = ""
+  ): Promise<void> {
+    const videoDocument = await this.fetchDocument(videoPageURL)
+    if (!videoDocument) return
+
+    const videoElement = videoDocument.querySelector<HTMLVideoElement>(
+      parser.getQuerySelector("videoservice", this.options)
+    )
+    const src = videoElement?.src
+    if (!src) return
+
+    const videoName =
+      videoDocument.querySelector(".page-header-headings h1")?.textContent?.trim() ||
+      videoDocument.querySelector(".heading")?.textContent?.trim() ||
+      videoDocument.querySelector(".instancename")?.textContent?.trim() ||
+      fallbackName
+
+    const sectionIndex = this.getSectionIndex(section)
+    const resource: VideoServiceResource = {
+      href: videoPageURL,
+      src,
+      name: videoName,
+      section,
+      partOfFolder,
+      type: "videoservice",
+      isNew: false,
+      isUpdated: false,
+      resourceIndex: this.resources.length + 1,
+      sectionIndex,
+    }
+
+    this.addVideoServiceResource(resource)
+  }
+
+  private isVideoServiceVideoURL(url: string): boolean {
+    try {
+      const parsedURL = new URL(url, location.href)
+      return (
+        parsedURL.pathname.includes("/mod/videoservice/view.php/") &&
+        parsedURL.pathname.includes("/video/")
+      )
+    } catch {
+      return false
+    }
+  }
+
+  private isVideoServiceBrowseURL(url: string): boolean {
+    try {
+      const parsedURL = new URL(url, location.href)
+      return (
+        parsedURL.pathname.includes("/mod/videoservice/view.php") &&
+        parsedURL.pathname.endsWith("/browse")
+      )
+    } catch {
+      return false
+    }
+  }
+
+  private getVideoServiceBrowseURL(url: string): string | null {
+    try {
+      const parsedURL = new URL(url, location.href)
+      const baseURL = getMoodleBaseURL(parsedURL.href)
+
+      const queryId = parsedURL.searchParams.get("id")
+      if (queryId) {
+        return `${baseURL}/mod/videoservice/view.php/cm/${queryId}/browse`
+      }
+
+      const cmPathMatch = parsedURL.pathname.match(/\/cm\/(\d+)(?:\/|$)/)
+      if (cmPathMatch?.[1]) {
+        return `${baseURL}/mod/videoservice/view.php/cm/${cmPathMatch[1]}/browse`
+      }
+    } catch {
+      return null
+    }
+
+    return null
+  }
+
+  private getVideoServiceBrowseURLFromDocument(document: Document): string | null {
+    const courseModuleId = this.getVideoServiceCourseModuleIdFromDocument(document)
+    if (!courseModuleId) {
+      return null
+    }
+
+    const canonicalHref =
+      document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href ??
+      document.location?.href ??
+      ""
+    const baseURL = getMoodleBaseURL(canonicalHref)
+    if (!baseURL) {
+      return null
+    }
+
+    return `${baseURL}/mod/videoservice/view.php/cm/${courseModuleId}/browse`
+  }
+
+  private getVideoServiceCourseModuleIdFromDocument(document: Document): string | null {
+    const bodyClass = document.body?.className ?? ""
+    const cmClassMatch = bodyClass.match(/\bcmid-(\d+)\b/)
+    return cmClassMatch?.[1] ?? null
+  }
+
+  private getVideoServiceCourseModuleId(url: string, document?: Document): string | null {
+    try {
+      const parsedURL = new URL(url, location.href)
+      const queryId = parsedURL.searchParams.get("id")
+      if (queryId) {
+        return queryId
+      }
+
+      const cmPathMatch = parsedURL.pathname.match(/\/cm\/(\d+)(?:\/|$)/)
+      if (cmPathMatch?.[1]) {
+        return cmPathMatch[1]
+      }
+    } catch {
+      // ignore and try document fallback below
+    }
+
+    if (!document) {
+      return null
+    }
+
+    return this.getVideoServiceCourseModuleIdFromDocument(document)
+  }
+
+  private async getVideoServiceVideosFromAPI(
+    courseModuleId: string
+  ): Promise<
+    Array<{
+      id: number
+      title: string
+      url: string
+    }>
+  > {
+    const sesskey = this.getMoodleSesskey(this.HTMLDocument)
+    if (!sesskey) {
+      return []
+    }
+
+    try {
+      const response = await fetch(
+        `/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=mod_videoservice_get_videos`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify([
+            {
+              index: 0,
+              methodname: "mod_videoservice_get_videos",
+              args: {
+                coursemoduleid: courseModuleId,
+                courseid: 0,
+              },
+            },
+          ]),
+        }
+      )
+      const data = await response.json()
+      const videos = data?.[0]?.data?.videos
+
+      if (!Array.isArray(videos)) {
+        return []
+      }
+
+      return videos
+        .filter((video) => typeof video?.url === "string" && typeof video?.title === "string")
+        .map((video) => ({
+          id: video.id,
+          title: video.title,
+          url: video.url,
+        }))
+    } catch (err) {
+      logger.error(err)
+      return []
+    }
+  }
+
+  private getVideoServiceVideoLinks(document: Document): HTMLAnchorElement[] {
+    return Array.from(
+      document.querySelectorAll<HTMLAnchorElement>('a[href*="/mod/videoservice/view.php"]')
+    )
+      .filter((link) => this.isVideoServiceVideoURL(link.href))
+      .reduce((nodes, current) => {
+        if (!nodes.some((node) => node.href === current.href)) {
+          nodes.push(current)
+        }
+        return nodes
+      }, [] as HTMLAnchorElement[])
+  }
+
+  private async addVideoService(node: HTMLElement) {
+    const href = parser.parseURLFromNode(node, "activity", this.options)
+    if (href === "") return
+
+    const section = parser.parseSectionName(node, this.HTMLDocument, this.options)
+    const fallbackName = parser.parseActivityNameFromNode(node)
+    const activityDocument = await this.fetchDocument(href)
+    if (!activityDocument) return
+    const courseModuleId = this.getVideoServiceCourseModuleId(href, activityDocument)
+
+    const embeddedVideo = activityDocument.querySelector<HTMLVideoElement>(
+      parser.getQuerySelector("videoservice", this.options)
+    )
+    if (embeddedVideo?.src) {
+      await this.addVideoServiceVideo(href, section, fallbackName, fallbackName)
+      return
+    }
+
+    const videoLinks = this.getVideoServiceVideoLinks(activityDocument)
+
+    if (videoLinks.length > 0) {
+      await Promise.all(
+        videoLinks.map((link) => {
+          const videoName = link.textContent?.trim() || fallbackName
+          return this.addVideoServiceVideo(link.href, section, videoName, fallbackName)
+        })
+      )
+      return
+    }
+
+    const browseLinks = Array.from(
+      activityDocument.querySelectorAll<HTMLAnchorElement>('a[href*="/mod/videoservice/view.php"]')
+    ).filter((link) => this.isVideoServiceBrowseURL(link.href))
+
+    for (const browseLink of browseLinks) {
+      const browseDocument = await this.fetchDocument(browseLink.href)
+      if (!browseDocument) continue
+
+      const browseVideoLinks = this.getVideoServiceVideoLinks(browseDocument)
+      if (browseVideoLinks.length === 0) continue
+
+      await Promise.all(
+        browseVideoLinks.map((link) => {
+          const videoName = link.textContent?.trim() || fallbackName
+          return this.addVideoServiceVideo(link.href, section, videoName, fallbackName)
+        })
+      )
+      return
+    }
+
+    const derivedBrowseURLs = [
+      this.getVideoServiceBrowseURL(href),
+      this.getVideoServiceBrowseURL(activityDocument.location?.href ?? ""),
+      this.getVideoServiceBrowseURLFromDocument(activityDocument),
+    ].filter((value, index, array): value is string => Boolean(value) && array.indexOf(value) === index)
+
+    for (const browseURL of derivedBrowseURLs) {
+      const browseDocument = await this.fetchDocument(browseURL)
+      if (!browseDocument) continue
+
+      const browseVideoLinks = this.getVideoServiceVideoLinks(browseDocument)
+      if (browseVideoLinks.length === 0) continue
+
+      await Promise.all(
+        browseVideoLinks.map((link) => {
+          const videoName = link.textContent?.trim() || fallbackName
+          return this.addVideoServiceVideo(link.href, section, videoName)
+        })
+      )
+      return
+    }
+
+    if (courseModuleId) {
+      const apiVideos = await this.getVideoServiceVideosFromAPI(courseModuleId)
+      if (apiVideos.length > 0) {
+        await Promise.all(
+          apiVideos.map((video) => {
+            const sectionIndex = this.getSectionIndex(section)
+            const resource: VideoServiceResource = {
+              href: `${location.origin}/mod/videoservice/view.php/cm/${courseModuleId}/video/${video.id}/view`,
+              src: video.url,
+              name: video.title || fallbackName,
+              section,
+              partOfFolder: fallbackName,
+              type: "videoservice",
+              isNew: false,
+              isUpdated: false,
+              resourceIndex: this.resources.length + 1,
+              sectionIndex,
+            }
+
+            this.addVideoServiceResource(resource)
+          })
+        )
+        return
+      }
+    }
+
+    await this.addVideoServiceVideo(href, section, fallbackName, fallbackName)
+  }
+
   async scan(testLocalStorage?: ExtensionStorage): Promise<void> {
     this.resources = []
     this.previousSeenResources = null
@@ -301,6 +633,7 @@ class Course {
         const isFile = node.classList.contains("resource")
         const isFolder = node.classList.contains("folder")
         const isURL = node.classList.contains("url")
+        const isVideoService = node.classList.contains("videoservice")
 
         if (isFile) {
           await this.addFile(node)
@@ -308,6 +641,8 @@ class Course {
           await this.addFolder(node)
         } else if (isURL) {
           await this.addURLNode(node)
+        } else if (isVideoService) {
+          await this.addVideoService(node)
         } else {
           await this.addActivity(node)
         }

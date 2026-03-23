@@ -476,7 +476,7 @@ class Downloader {
   private async downloadVideoServiceVideo(resource: VideoServiceResource) {
     if (this.isCancelled) return
 
-    const { name, src } = resource
+    const { name, src, partOfFolder } = resource
 
     let fileName = parseFileNameFromPluginFileURL(src)
 
@@ -486,6 +486,11 @@ class Downloader {
       if (fileType !== "" && name !== "") {
         fileName = `${sanitizeFileName(name)}.${fileType}`
       }
+    }
+
+    if (partOfFolder) {
+      const folderName = sanitizeFileName(partOfFolder)
+      fileName = `${folderName}{slash}${fileName}`
     }
 
     await this.download(src, fileName, resource)

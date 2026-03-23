@@ -56,6 +56,41 @@
         </label>
       </div>
 
+      <div v-if="videoResources.length > 0">
+        <label class="category" @input="(e) => onCategoryClick(e, 'video')">
+          <span>Videos</span>
+          <div>
+            <input :ref="setCbRef('videosCb')" class="mt-1" type="checkbox" />
+          </div>
+        </label>
+        <label
+          v-for="(r, i) in videoResources"
+          :id="`videoCb${String(i)}`"
+          :key="`videoCb${String(i)}`"
+          :data-href="r.href"
+          class="resource"
+          @mousemove="onMouseOver"
+          @input="onCheck"
+        >
+          <span class="resource">{{ r.name }}</span>
+          <div>
+            <ArrowTopRightOnSquareIcon
+              class="size-4 mt-0.5"
+              @click.prevent="openURL(r.href)"
+            ></ArrowTopRightOnSquareIcon>
+          </div>
+          <div>
+            <input
+              :ref="setCbRef(`videoCb${String(i)}`)"
+              :data-href="r.href"
+              type="checkbox"
+              :checked="r.selected"
+              class="mt-1"
+            />
+          </div>
+        </label>
+      </div>
+
       <div v-if="folderResources.length > 0">
         <label class="category" @input="(e) => onCategoryClick(e, 'folder')">
           <span>Folders</span>
@@ -72,7 +107,7 @@
           @mousemove="onMouseOver"
           @input="onCheck"
         >
-          <span class="resource">{{ r.name || r.name }}</span>
+          <span class="resource">{{ r.name }}</span>
           <div>
             <ArrowTopRightOnSquareIcon
               class="size-4 mt-0.5"
@@ -107,7 +142,7 @@ import useNavigation from "../composables/useNavigation"
 import { onlyNewResources } from "../state"
 import { ArrowTopRightOnSquareIcon } from "@heroicons/vue/24/outline"
 
-type CbCategory = "all" | "file" | "folder"
+type CbCategory = "all" | "file" | "video" | "folder"
 
 const props = defineProps<{
   resources: Resource[]
@@ -140,9 +175,8 @@ const filteredResources = computed(() => {
     return isMatch
   })
 })
-const fileResources = computed(() =>
-  filteredResources.value.filter((r) => isFile(r) || isVideoServiceVideo(r))
-)
+const fileResources = computed(() => filteredResources.value.filter(isFile))
+const videoResources = computed(() => filteredResources.value.filter(isVideoServiceVideo))
 const folderResources = computed(() => filteredResources.value.filter(isFolder))
 
 const onMouseOver = (e: Event) => {

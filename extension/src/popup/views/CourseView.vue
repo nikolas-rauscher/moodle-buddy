@@ -10,7 +10,13 @@
       <label>
         <input v-model="downloadFiles" type="checkbox" :disabled="disableFilesCb" />
         <span class="ml-1">
-          {{ onlyNewResources ? nNewFiles + nUpdatedFiles : nFiles }} file(s) (PDF, etc.)
+          {{ onlyNewResources ? nNewFiles + nUpdatedFiles : nFiles }} file(s)
+        </span>
+      </label>
+      <label>
+        <input v-model="downloadVideos" type="checkbox" :disabled="disableVideosCb" />
+        <span class="ml-1">
+          {{ onlyNewResources ? nNewVideos + nUpdatedVideos : nVideos }} video(s)
         </span>
       </label>
       <label>
@@ -30,7 +36,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue"
 import { sendEvent } from "@shared/helpers"
-import { isFile, isFolder } from "@shared/resourceHelpers"
+import { isFile, isFolder, isVideoServiceVideo } from "@shared/resourceHelpers"
 import { Resource, Activity, Message, CourseScanResultMessage } from "@types"
 import FilesViewLayout from "../components/FilesViewLayout.vue"
 import DetailedResourceSelection from "../components/DetailedResourceSelection.vue"
@@ -42,25 +48,47 @@ const resources = ref<Resource[]>([])
 const activities = ref<Activity[]>([])
 const nFiles = computed(() => resources.value.filter(isFile).length)
 const nNewFiles = computed(() => resources.value.filter((r) => isFile(r) && r.isNew).length)
-const nUpdatedFiles = computed(() => resources.value.filter((r) => isFile(r) && r.isUpdated).length)
+const nUpdatedFiles = computed(() =>
+  resources.value.filter((r) => isFile(r) && r.isUpdated).length
+)
+const nVideos = computed(() => resources.value.filter(isVideoServiceVideo).length)
+const nNewVideos = computed(() =>
+  resources.value.filter((r) => isVideoServiceVideo(r) && r.isNew).length
+)
+const nUpdatedVideos = computed(() =>
+  resources.value.filter((r) => isVideoServiceVideo(r) && r.isUpdated).length
+)
 const nFolders = computed(() => resources.value.filter(isFolder).length)
 const nNewFolders = computed(() => resources.value.filter((r) => isFolder(r) && r.isNew).length)
 const nUpdatedFolders = computed(
   () => resources.value.filter((r) => isFolder(r) && r.isUpdated).length
 )
 const nNewAndUpdatedResources = computed(
-  () => nNewFiles.value + nUpdatedFiles.value + nNewFolders.value + nUpdatedFolders.value
+  () =>
+    nNewFiles.value +
+    nUpdatedFiles.value +
+    nNewVideos.value +
+    nUpdatedVideos.value +
+    nNewFolders.value +
+    nUpdatedFolders.value
 )
 const nNewActivities = computed(() => activities.value.filter((a) => a.isNew).length)
 
 // Checkboxes
 const downloadFiles = ref(false)
+const downloadVideos = ref(false)
 const downloadFolders = ref(false)
 const disableFilesCb = computed(() => {
   if (onlyNewResources.value) {
     return nNewFiles.value + nUpdatedFiles.value === 0
   }
   return nFiles.value === 0
+})
+const disableVideosCb = computed(() => {
+  if (onlyNewResources.value) {
+    return nNewVideos.value + nUpdatedVideos.value === 0
+  }
+  return nVideos.value === 0
 })
 const disableFoldersCb = computed(() => {
   if (onlyNewResources.value) {
@@ -71,9 +99,11 @@ const disableFoldersCb = computed(() => {
 const setCheckboxState = () => {
   if (onlyNewResources.value) {
     downloadFiles.value = nNewFiles.value + nUpdatedFiles.value !== 0
+    downloadVideos.value = nNewVideos.value + nUpdatedVideos.value !== 0
     downloadFolders.value = nNewFolders.value + nUpdatedFolders.value !== 0
   } else {
     downloadFiles.value = nFiles.value !== 0
+    downloadVideos.value = nVideos.value !== 0
     downloadFolders.value = nFolders.value !== 0
   }
 }
@@ -83,6 +113,15 @@ const setFilesSelected = () =>
       r.selected = downloadFiles.value && (r.isNew || r.isUpdated)
     } else {
       r.selected = downloadFiles.value
+    }
+  })
+
+const setVideosSelected = () =>
+  resources.value.filter(isVideoServiceVideo).forEach((r) => {
+    if (onlyNewResources.value) {
+      r.selected = downloadVideos.value && (r.isNew || r.isUpdated)
+    } else {
+      r.selected = downloadVideos.value
     }
   })
 
@@ -100,9 +139,11 @@ watch(onlyNewResources, () => {
   }
 
   setFilesSelected()
+  setVideosSelected()
   setFoldersSelected()
 })
 watch(downloadFiles, setFilesSelected)
+watch(downloadVideos, setVideosSelected)
 watch(downloadFolders, setFoldersSelected)
 
 // Selection Tab
@@ -111,10 +152,12 @@ watch(currentSelectionTab, () => {
     setCheckboxState()
   } else if (currentSelectionTab.value?.id === "detailed") {
     downloadFiles.value = false
+    downloadVideos.value = false
     downloadFolders.value = false
   }
 
   setFilesSelected()
+  setVideosSelected()
   setFoldersSelected()
 })
 
@@ -158,6 +201,7 @@ chrome.runtime.onMessage.addListener(async (message: Message) => {
 
     setCheckboxState()
     setFilesSelected()
+    setVideosSelected()
     setFoldersSelected()
   }
 })
