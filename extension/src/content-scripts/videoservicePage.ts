@@ -19,14 +19,56 @@ let videoResources: VideoServiceResource[] = []
 let cancel = false
 let error = false
 
+function isVideoServiceViewPage() {
+  return (
+    location.pathname.includes("/mod/videoservice/view.php") &&
+    !location.pathname.endsWith("/browse")
+  )
+}
+
+function isVideoServiceBrowsePage() {
+  return (
+    location.pathname.includes("/mod/videoservice/view.php") &&
+    location.pathname.endsWith("/browse")
+  )
+}
+
+function getVideoSrc(options: ExtensionOptions): string {
+  const videoURLSelector = getQuerySelector("videoservice", options)
+  const videoElement = document.querySelector<HTMLVideoElement>(videoURLSelector)
+
+  if (!videoElement) return ""
+
+  return videoElement.src
+}
+
+function getBrowseBackButton() {
+  return document.querySelector<HTMLAnchorElement>('a[href*="/mod/videoservice/"][href$="/browse"]')
+}
+
+async function waitForVideoServiceContent(options: ExtensionOptions) {
+  for (let i = 0; i < 15; i++) {
+    const hasVideo = getVideoSrc(options) !== ""
+    const hasBrowseLinks =
+      document.querySelectorAll<HTMLAnchorElement>('a[href*="/mod/videoservice/view.php"]').length > 0
+
+    if (hasVideo || hasBrowseLinks) {
+      return
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+}
+
 async function scanForVideos(options: ExtensionOptions) {
   try {
     videoResources = []
     videoNodes = []
 
-    if (location.href.endsWith("view")) {
-      const videoURLSelector = getQuerySelector("videoservice", options)
-      const videoElement: HTMLVideoElement | null = document.querySelector(videoURLSelector)
+    await waitForVideoServiceContent(options)
+
+    if (isVideoServiceViewPage()) {
+      const videoSrc = getVideoSrc(options)
 
       let fileName = ""
       const mainHTML = document.querySelector("#region-main")
@@ -42,10 +84,10 @@ async function scanForVideos(options: ExtensionOptions) {
         }
       }
 
-      if (videoElement !== null && fileName !== "") {
+      if (videoSrc !== "" && fileName !== "") {
         const videoResource: VideoServiceResource = {
-          href: videoElement.src,
-          src: videoElement.src,
+          href: videoSrc,
+          src: videoSrc,
           name: fileName,
           section: "",
           isNew: false,
@@ -59,16 +101,23 @@ async function scanForVideos(options: ExtensionOptions) {
       }
     }
 
-    if (location.href.endsWith("browse")) {
+    if (isVideoServiceBrowsePage()) {
       const videoServiceURLs =
-        document.querySelectorAll<HTMLAnchorElement>("a[href*='videoservice']")
+        document.querySelectorAll<HTMLAnchorElement>(
+          'a[href*="/mod/videoservice/view.php/"][href*="/video/"][href$="/view"]'
+        )
 
       videoNodes = Array.from(videoServiceURLs)
-        .filter((n) => n.href.endsWith("view"))
+        .filter(
+          (n) =>
+            n.href.includes("/mod/videoservice/view.php/") &&
+            n.href.includes("/video/") &&
+            n.href.endsWith("/view")
+        )
         .reduce((nodes, current) => {
           const links = nodes.map((n) => n.href)
           if (!links.includes(current.href)) {
-            if (current.textContent !== "") {
+            if (current.textContent?.trim() !== "") {
               nodes.push(current)
             }
           }
@@ -107,17 +156,16 @@ async function getVideoResourceSrc(
       videoNode?.click()
 
       function attemptSrcParsing() {
-        const videoURLSelector = getQuerySelector("videoservice", options)
-        const videoElement = document.querySelector<HTMLVideoElement>(videoURLSelector)
-        const backButton = document.querySelector<HTMLAnchorElement>("a[href$='browse']")
+        const videoSrc = getVideoSrc(options)
+        const backButton = getBrowseBackButton()
 
-        if (videoElement === null || backButton === null) {
+        if (videoSrc === "" || backButton === null) {
           setTimeout(attemptSrcParsing, 2000)
           return
         }
 
         backButton?.click()
-        resolve(videoElement.src)
+        resolve(videoSrc)
       }
 
       setTimeout(attemptSrcParsing, 3000)
@@ -154,7 +202,7 @@ chrome.runtime.onMessage.addListener(async (message: Message) => {
 
     const id = Date.now().toString()
     try {
-      if (location.href.endsWith("view")) {
+      if (isVideoServiceViewPage()) {
         // A single video is being diplayed
         await chrome.runtime.sendMessage({
           command: COMMANDS.DOWNLOAD,
@@ -175,7 +223,7 @@ chrome.runtime.onMessage.addListener(async (message: Message) => {
           errors: 0,
           isDone: true,
         } satisfies DownloadProgressMessage)
-      } else if (location.href.endsWith("browse")) {
+      } else if (isVideoServiceBrowsePage()) {
         // A list of videos is being displayed
         const downloadVideoResources: VideoServiceResource[] = []
         for (let i = 0; i < selectedResources.length; i++) {
